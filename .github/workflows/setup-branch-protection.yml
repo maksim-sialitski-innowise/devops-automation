@@ -1,0 +1,71 @@
+name: Setup Branch Protection
+
+# Reusable workflow for automating branch protection rules
+on:
+  workflow_call:
+    inputs:
+      branch-name:
+        description: 'Branch to protect'
+        required: false
+        default: 'main'
+
+jobs:
+  setup-protection:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # Step 1: Configure main branch protection rules
+      - name: Configure branch protection
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Use GitHub CLI to set up branch protection
+          gh api \
+            -X PUT \
+            /repos/${{ github.repository }}/branches/${{ inputs.branch-name }}/protection \
+            --input - << 'EOF'
+          {
+            "required_status_checks": {
+              "strict": true,  # Require branches to be up-to-date
+              "contexts": []   # Will be populated by actual checks
+            },
+            "enforce_admins": false,  # Admins can bypass some rules
+            "required_pull_request_reviews": {
+              "required_approving_review_count": 1,
+              "dismiss_stale_reviews": true,
+              "require_code_owner_reviews": false
+            },
+            "restrictions": null,
+            "allow_force_pushes": false,
+            "allow_deletions": false,
+            "required_conversation_resolution": true
+          }
+          EOF
+          echo "Branch protection configured for ${{ inputs.branch-name }}"
+      
+      # Step 2: Enforce linear history requirement
+      - name: Enforce linear history requirement
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Configure repository to only allow rebase merging
+          gh api \
+            -X PATCH \
+            /repos/${{ github.repository }} \
+            -f allow_rebase_merge=true \
+            -f allow_merge_commit=false \
+            -f allow_squash_merge=false
+          echo "Linear history requirement enabled"
+      
+      # Step 3: Display configuration summary
+      - name: Display configuration summary
+        run: |
+          echo "## Branch Protection Configuration Summary"
+          echo ""
+          echo "**Branch:** ${{ inputs.branch-name }}"
+          echo "**Up-to-date requirement:** Enabled"
+          echo "**Linear history:** Enabled (rebase only)"
+          echo "**Required reviews:** 1 approval minimum"
+          echo "**Admin bypass:** Enabled"
+          echo ""
+          echo "Configuration completed successfully!"
