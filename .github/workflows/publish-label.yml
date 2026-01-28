@@ -1,94 +1,65 @@
 name: Publish Label Reusable
-
-# Reusable workflow for creating release candidate
 on:
   workflow_call:
     inputs:
       node-version:
-        description: 'Node.js version to use'
-        required: false
+        type: string
         default: '20'
     secrets:
       NPM_TOKEN:
-        required: false
+        required: true
+    outputs:
+      release-ready:
+        value: ${{ jobs.release-candidate.outputs.success }}
 
 jobs:
   release-candidate:
     runs-on: ubuntu-latest
+    outputs:
+      success: ${{ steps.artifact-upload.outcome == 'success' }}
     
     steps:
-      # Step 1: Checkout with full history for versioning
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Get full git history
+          fetch-depth: 0
       
-      # Step 2: Check if version already exists on npm
-      - name: Check if version already exists on npm
+      - name: Store original version
+        id: original-version
+        run: |
+          echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      
+      - name: Check if version exists on npm
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          echo "Checking if current version exists on npm..."
-          # Extract version from package.json
-          CURRENT_VERSION=$(node -p "require('./package.json').version")
-          echo "Current version in package.json: $CURRENT_VERSION"
+          VERSION=$(node -p "require('./package.json').version")
+          NAME=$(node -p "require('./package.json').name")
+          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/.npmrc
           
-          # Try to check if version exists (commented for safety)
-          # npm view my-package@$CURRENT_VERSION version
-          # if [ $? -eq 0 ]; then
-          #   echo "::error::Version $CURRENT_VERSION already exists on npm"
-          #   exit 1
-          # fi
-          
-          echo "Version check passed (stub implementation)"
+          if npm view "$NAME@$VERSION" version > /dev/null 2>&1; then
+            echo "::error::Version $VERSION exists"
+            exit 1
+          fi
       
-      # Step 3: Create development version with suffix
-      - name: Create dev version with suffix
+      - name: Create dev version
         id: dev-version
         run: |
-          # Get current version from package.json
-          CURRENT_VERSION=$(node -p "require('./package.json').version")
-          # Create short SHA for unique identifier
-          SHORT_SHA=${GITHUB_SHA::7}
-          # Combine version with suffix (e.g., 1.0.0-dev-abc1234)
-          DEV_VERSION="${CURRENT_VERSION}-dev-${SHORT_SHA}"
-          
-          # Update package.json with new version (no git tag)
-          npm version $DEV_VERSION --no-git-tag-version --allow-same-version
-          
-          # Output the new version for use in later steps
-          echo "dev_version=$DEV_VERSION" >> $GITHUB_OUTPUT
-          echo "Created dev version: $DEV_VERSION"
+          CURRENT=$(node -p "require('./package.json').version")
+          DEV="${CURRENT}-dev-${GITHUB_SHA::7}"
+          npm version $DEV --no-git-tag-version
+          echo "dev_version=$DEV" >> $GITHUB_OUTPUT
       
-      # Step 4: Setup Node.js with npm registry
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
           registry-url: 'https://registry.npmjs.org/'
       
-      # Step 5: Install dependencies
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
+      - run: npm run build
       
-      # Step 6: Build with development version
-      - name: Build with dev version
-        run: npm run build
-      
-      # Step 7: Upload release candidate artifacts
-      - name: Upload release candidate artifacts
+      - name: Upload artifacts
+        id: artifact-upload
         uses: actions/upload-artifact@v4
         with:
-          name: release-candidate-${{ steps.dev-version.outputs.dev_version }}
-          path: |
-            dist/
-            package.json
-      
-      # Step 8: Display release information
-      - name: Display release info
-        run: |
-          echo "## Release Candidate Ready"
-          echo ""
-          echo "**Version:** ${{ steps.dev-version.outputs.dev_version }}"
-          echo "**Commit:** ${{ github.sha }}"
-          echo "**Artifact:** release-candidate-${{ steps.dev-version.outputs.dev_version }}"
+          name: rc-${{ steps.dev-version.outputs.dev_version }}
+          path: dist/
