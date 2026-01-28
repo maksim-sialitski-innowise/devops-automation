@@ -8,7 +8,7 @@ on:
     secrets:
       NPM_TOKEN:
         required: true
-      GITHUB_TOKEN:
+      RELEASE_TOKEN:
         required: true
     outputs:
       published:
