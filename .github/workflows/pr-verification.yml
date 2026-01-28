@@ -1,34 +1,29 @@
-name: PR Verification Reusable
+name: PR Verification
 
-# This is a reusable workflow - can be called from other repos
 on:
   workflow_call:
     inputs:
       node-version:
-        description: 'Node.js version to use'
-        required: false
+        type: string
         default: '20'
+    outputs:
+      verification-passed:
+        value: ${{ jobs.verification.outputs.success }}
 
 jobs:
-  pr-verification:
+  verification:
     runs-on: ubuntu-latest
+    outputs:
+      success: ${{ steps.final-check.outcome == 'success' }}
     
     steps:
-      # Step 1: Checkout code from the calling repository
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
       
-      # Step 2: Verify locked dependencies exist
-      - name: Check for package-lock.json
-        run: |
-          if [ ! -f "package-lock.json" ]; then
-            echo "::error::Package-lock.json missing - dependencies must be locked"
-            exit 1
-          fi
-          echo " package-lock.json found"
+      - name: Check locked dependencies
+        run: test -f package-lock.json || (echo "Missing package-lock.json" && exit 1)
       
-      # Step 3: Check if PR branch is up to date with main
-      - name: Check if branch is up to date with main
+      - name: Check branch status
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
@@ -37,29 +32,20 @@ jobs:
               repo: context.repo.repo,
               pull_number: context.issue.number
             });
-            if (pr.mergeable_state === 'behind') {
-              core.setFailed('Branch is not up to date with main. Please rebase.');
+            if (pr.mergeable_state === 'behind' || pr.mergeable_state === 'dirty') {
+              core.setFailed(`Branch not ready. State: ${pr.mergeable_state}`);
             }
       
-      # Step 4: Setup Node.js with caching for faster builds
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
           cache: 'npm'
       
-      # Step 5: Install dependencies using package-lock.json
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
+      - run: npm run lint 2>/dev/null || echo "No lint script"
+      - run: npm run build
+      - run: npm test
       
-      # Step 6: Run linting (skip if no lint script exists)
-      - name: Run linting
-        run: npm run lint || echo "⚠️ No lint script found, skipping"
-      
-      # Step 7: Build the project
-      - name: Build project
-        run: npm run build
-      
-      # Step 8: Run unit tests (skip if no test script exists)
-      - name: Run unit tests
-        run: npm test || echo "⚠️ No test script found, skipping"
+      - name: Final check
+        id: final-check
+        run: echo "PR verification passed"
