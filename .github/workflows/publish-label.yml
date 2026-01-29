@@ -1,21 +1,23 @@
 name: Publish Label Reusable
+
 on:
   workflow_call:
     inputs:
       node-version:
         type: string
         default: '20'
+      add-dev-suffix:
+        type: boolean
+        default: true
     secrets:
       NPM_TOKEN:
         required: true
-    outputs:
-      release-ready:
-        value: ${{ jobs.release-candidate.outputs.success }}
 
 jobs:
   release-candidate:
     runs-on: ubuntu-latest
     outputs:
+      clean-version: ${{ steps.get-clean-version.outputs.clean-version }}
       success: ${{ steps.artifact-upload.outcome == 'success' }}
     
     steps:
@@ -23,31 +25,45 @@ jobs:
         with:
           fetch-depth: 0
       
-      - name: Store original version
+      - name: Get original version
         id: original-version
         run: |
           echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
       
-      - name: Check if version exists on npm
+      - name: Extract clean version
+        id: get-clean-version
+        run: |
+          ORIGINAL="${{ steps.original-version.outputs.version }}"
+          CLEAN_VERSION=$(echo "$ORIGINAL" | sed 's/-dev-.*//')
+          echo "clean-version=$CLEAN_VERSION" >> $GITHUB_OUTPUT
+          echo "Clean version for release: $CLEAN_VERSION"
+      
+      - name: Check if clean version exists on npm
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          VERSION=$(node -p "require('./package.json').version")
           NAME=$(node -p "require('./package.json').name")
+          CLEAN_VERSION="${{ steps.get-clean-version.outputs.clean-version }}"
           echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/.npmrc
           
-          if npm view "$NAME@$VERSION" version > /dev/null 2>&1; then
-            echo "::error::Version $VERSION exists"
+          echo "Checking if version $CLEAN_VERSION exists on npm..."
+          if npm view "$NAME@$CLEAN_VERSION" > /dev/null 2>&1; then
+            echo "::error::Version $CLEAN_VERSION already exists on npm!"
+            echo "Cannot proceed with release"
             exit 1
           fi
+          echo "✓ Version $CLEAN_VERSION is available"
       
-      - name: Create dev version
+      - name: Create dev version (if requested)
+        if: ${{ inputs.add-dev-suffix }}
         id: dev-version
         run: |
-          CURRENT=$(node -p "require('./package.json').version")
-          DEV="${CURRENT}-dev-${GITHUB_SHA::7}"
-          npm version $DEV --no-git-tag-version
-          echo "dev_version=$DEV" >> $GITHUB_OUTPUT
+          CLEAN_VERSION="${{ steps.get-clean-version.outputs.clean-version }}"
+          DEV_VERSION="${CLEAN_VERSION}-dev-${GITHUB_SHA::7}"
+          
+          echo "Creating dev version: $DEV_VERSION"
+          npm version "$DEV_VERSION" --no-git-tag-version
+          echo "dev_version=$DEV_VERSION" >> $GITHUB_OUTPUT
       
       - uses: actions/setup-node@v4
         with:
@@ -57,9 +73,15 @@ jobs:
       - run: npm ci
       - run: npm run build
       
+      - name: Verify build
+        run: test -d dist/ || exit 1
+      
       - name: Upload artifacts
         id: artifact-upload
         uses: actions/upload-artifact@v4
         with:
-          name: rc-${{ steps.dev-version.outputs.dev_version }}
-          path: dist/
+          name: release-candidate-${{ github.sha }}
+          path: |
+            dist/
+            package.json
+          retention-days: 7
