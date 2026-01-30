@@ -25,9 +25,21 @@ jobs:
           node-version: ${{ inputs.node-version }}
           registry-url: 'https://registry.npmjs.org/'
 
+      # Install GitHub CLI for tag and release creation
+      - name: Install GitHub CLI
+        run: |
+          type -p curl >/dev/null || sudo apt update && sudo apt install curl -y
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
+
       - name: Get package version
         id: get-version
-        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "PACKAGE_VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Verify version is not published
         env:
@@ -50,4 +62,47 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN" > ~/.npmrc
+          echo "Publishing version ${{ steps.get-version.outputs.version }} to npm..."
           npm publish --access public
+          echo "Successfully published to npm!"
+
+      - name: Create Git tag (vX.Y.Z)
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          VERSION="${{ steps.get-version.outputs.version }}"
+          TAG_NAME="v$VERSION"
+          
+          echo "Creating Git tag: $TAG_NAME"
+          
+          # Configure git user
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          
+          # Create annotated tag
+          git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
+          
+          # Push tag to remote
+          git push origin "$TAG_NAME"
+          
+          echo "Git tag $TAG_NAME created and pushed successfully"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          VERSION="${{ steps.get-version.outputs.version }}"
+          TAG_NAME="v$VERSION"
+          
+          echo "Creating GitHub Release: $TAG_NAME"
+          
+          # Create GitHub Release with auto-generated release notes
+          gh release create "$TAG_NAME" \
+            --title "Release $TAG_NAME" \
+            --generate-notes \
+            --target main
+          
+          echo "GitHub Release $TAG_NAME created successfully"
+          
+          # Optional: Display release URL
+          gh release view "$TAG_NAME" --json url | jq -r '.url' | xargs echo "📎 Release URL:"
